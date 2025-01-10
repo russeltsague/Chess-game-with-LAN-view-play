@@ -4,13 +4,18 @@ import pygame
 import sys
 import time
 import chess
+import sqlite3
+from database.db import DBManager  # Make sure to import the DBManager
+
+# Initialize the DBManager
+db_manager = DBManager()
 
 # Initialize pygame
 pygame.init()
 
 # Game constants
 board_size = 8
-square_size = 110
+square_size = 70
 WIDTH = square_size * board_size + 250
 HEIGHT = square_size * board_size
 
@@ -35,13 +40,17 @@ sock = None
 is_server = None
 turn = True  # True for White, False for Black (server starts as White)
 move_list = []  # List to keep track of moves
+player_names = ["", ""]  # List to store player names
+player_ids = [None, None]  # List to store player IDs
+
 
 # Function to initialize the network
 def setup_connection():
-    global sock, is_server, turn
+    global sock, is_server, turn, player_name, player_id
     role = input("Choose your role (server/client): ").strip().lower()
     
     if role == "server":
+
         is_server = True
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(("0.0.0.0", 5555))
@@ -50,16 +59,34 @@ def setup_connection():
         conn, addr = sock.accept()
         print(f"Client connected from {addr}")
         sock = conn
+
+        
+        player1_name = input("Enter your name (Player1, White): ").strip()
+        player1_id = db_manager.save_player(player1_name)
+        print(f"Player 1 (White) saved with name {player1_name} and ID {player1_id}")
+
     elif role == "client":
+
         is_server = False
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_ip = input("Enter the server IP address: ").strip()
         sock.connect((server_ip, 5555))
         print("Connected to the server.")
         turn = False  # Clients start as Black
+
+        player2_name = input("Enter Player2's name (Black): ").strip()
+        player2_id = db_manager.save_player(player2_name)        
+        print(f"Player 2 (Black) saved with name {player2_name} and ID {player2_id}")
+        
+
     else:
         print("Invalid role. Restart the game and choose server or client.")
         sys.exit()
+
+     
+
+    
+
 
 # Function to send moves to the opponent
 def send_move(move):
@@ -136,6 +163,14 @@ def handle_move(start_square, end_square):
         move = chess.Move.from_uci(f"{start_square}{end_square}")
         if move in board.legal_moves:
             board.push(move)  # Apply the move locally
+
+           
+            player_id = 1 if turn else 2  # Set player IDs (1 for White, 2 for Black)
+            
+            # Save the move in the database
+            db_manager.save_move(player_id, move.uci())
+            
+
             send_move(move.uci())  # Send the move to the opponent
             move_list.append(move.uci())  # Add the move to the tracker
             turn = not turn       # Switch turns
@@ -149,13 +184,15 @@ def draw_sidebar():
     pygame.draw.rect(screen, black, pygame.Rect(board_size * square_size, 0, 250, HEIGHT))
     
     # Display player names
-    player1_name = font.render("White: You", True, white)
-    player2_name = font.render("Black: Opponent", True, white)
-    screen.blit(player1_name, (board_size * square_size + 20, 20))
-    screen.blit(player2_name, (board_size * square_size + 20, 60))
+    player1_name = db_manager.get_player_name(1)  # Get player 1 name
+    player2_name = db_manager.get_player_name(2)  # Get player 2 name
+    player1_text = font.render(f"White: {player1_name}", True, white)
+    player2_text = font.render(f"Black: {player2_name}", True, white)
+    screen.blit(player1_text, (board_size * square_size + 20, 20))
+    screen.blit(player2_text, (board_size * square_size + 20, 60))
     
     # Display current turn
-    turn_message = "White to Play" if board.turn else "Black to Play"
+    turn_message = f"{player1_name} to Play" if board.turn else f"{player2_name} to Play"
     turn_text = font.render(turn_message, True, white)
     screen.blit(turn_text, (board_size * square_size + 20, 120))
     
