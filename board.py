@@ -40,14 +40,15 @@ sock = None
 is_server = None
 turn = True  # True for White, False for Black (server starts as White)
 move_list = []  # List to keep track of moves
+
 player_names = ["", ""]  # List to store player names
 player_ids = [None, None]  # List to store player IDs
 
 
 # Function to initialize the network
 def setup_connection():
-    global sock, is_server, turn, player_name, player_id
-    role = input("Choose your role (server/client): ").strip().lower()
+    global sock, is_server, turn, player_names, player1_name, player2_name, player_ids
+    role = input("Choose your role (server/client/viewer): ").strip().lower()
     
     if role == "server":
 
@@ -77,35 +78,53 @@ def setup_connection():
         player2_name = input("Enter Player2's name (Black): ").strip()
         player2_id = db_manager.save_player(player2_name)        
         print(f"Player 2 (Black) saved with name {player2_name} and ID {player2_id}")
-        
+
+    elif role == "viewer":
+        is_server = False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_ip = input("Enter the server IP address: ").strip()
+        sock.connect((server_ip, 5555))
+        print("Connected to the server.")
+        turn = False  # Clients start as Black
+
 
     else:
         print("Invalid role. Restart the game and choose server or client.")
         sys.exit()
 
-     
-
-    
-
 
 # Function to send moves to the opponent
 def send_move(move):
     if sock:
-        sock.send(move.encode())
+        # Add player identifier (e.g., "Player1" or "Player2") to the move
+        player_name = player_names[0] if turn else player_names[1]
+        move_data = f"{player_name}:{move}"  # Example: "Player1:e2e4"
+        sock.send(move_data.encode())
+
 
 # Function to receive moves from the opponent
 def receive_moves():
     global turn
     while True:
         try:
-            move = sock.recv(1024).decode()
-            if move:
-                print(f"Move received: {move}")
-                board.push_uci(move)  # Update the board with the received move
-                turn = not turn       # Switch turns
+            move_data = sock.recv(1024).decode()
+            if move_data:
+                print(f"Move received: {move_data}")
+                
+                # Parse player and move
+                player_name, move = move_data.split(":")
+                
+                # Push move to the chess board
+                board.push_uci(move)
+                
+                # Add move to the move_list
+                move_list.append({"player": player_name, "move": move})
+                
+                turn = not turn  # Switch turns
         except Exception as e:
             print(f"Error receiving move: {e}")
             break
+
 
 # Function to draw the chessboard (flipped for client)
 def draw_board():
@@ -124,14 +143,14 @@ def draw_pieces():
         'R': pygame.image.load('images/white_rook.png'),
         'N': pygame.image.load('images/white_knight.png'),
         'B': pygame.image.load('images/white_bishop.png'),
-        'Q': pygame.image.load('images/white_queen.png'),
-        'K': pygame.image.load('images/white_king.png'),
+        'Q': pygame.image.load('images/white_king.png'),
+        'K': pygame.image.load('images/white_queen.png'),
         'p': pygame.image.load('images/black_pawn.png'),
         'r': pygame.image.load('images/black_rook.png'),
         'n': pygame.image.load('images/black_knight.png'),
         'b': pygame.image.load('images/black_bishop.png'),
-        'q': pygame.image.load('images/black_queen.png'),
-        'k': pygame.image.load('images/black_king.png'),
+        'q': pygame.image.load('images/black_king.png'),
+        'k': pygame.image.load('images/black_queen.png'),
     }
     
     for square in chess.SQUARES:
@@ -164,15 +183,12 @@ def handle_move(start_square, end_square):
         if move in board.legal_moves:
             board.push(move)  # Apply the move locally
 
-           
-            player_id = 1 if turn else 2  # Set player IDs (1 for White, 2 for Black)
-            
             # Save the move in the database
-            db_manager.save_move(player_id, move.uci())
-            
+            db_manager.save_move(move.uci(), player_names[turn])
 
+            move_list.append({"player": player_names[turn], "move": move.uci()})  # Save move in move_list
             send_move(move.uci())  # Send the move to the opponent
-            move_list.append(move.uci())  # Add the move to the tracker
+           
             turn = not turn       # Switch turns
         else:
             print("Illegal move!")
@@ -209,9 +225,12 @@ def draw_sidebar():
     screen.blit(status_display, (board_size * square_size + 20, 160))
 
     # Display move tracker
-    move_text = "Moves:\n" + "\n".join(move_list[-5:])  # Show last 5 moves
-    move_tracker = font.render(move_text, True, white)
-    screen.blit(move_tracker, (board_size * square_size + 20, 200))
+    move_text_y = 200  # Initial Y position for displaying moves
+    for move_entry in move_list:
+        move_text = f"{move_entry['player']}: {move_entry['move']}"
+        move_display = font.render(move_text, True, white)
+        screen.blit(move_display, (board_size * square_size + 20, move_text_y))
+        move_text_y += 20  # Increment Y position for the next move
 
 # Main game loop
 def main():
