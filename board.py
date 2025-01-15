@@ -110,15 +110,31 @@ def receive_moves():
             move_data = sock.recv(1024).decode()
             if move_data:
                 print(f"Move received: {move_data}")
-                
+
                 # Parse player and move
                 player_name, move = move_data.split(":")
                 
                 # Push move to the chess board
                 board.push_uci(move)
                 
+                # Get piece type
+                start_square, end_square = move[:2], move[2:]
+                piece = board.piece_at(chess.parse_square(end_square))
+                piece_name = {
+                    chess.PAWN: "Pawn",
+                    chess.KNIGHT: "Knight",
+                    chess.BISHOP: "Bishop",
+                    chess.ROOK: "Rook",
+                    chess.QUEEN: "Queen",
+                    chess.KING: "King"
+                }.get(piece.piece_type, "Unknown") if piece else "Unknown"
+
                 # Add move to the move_list
-                move_list.append({"player": player_name, "move": move})
+                move_list.append({
+                    "player": player_name,
+                    "piece": piece_name,
+                    "move": f"{start_square} to {end_square}"
+                })
                 
                 turn = not turn  # Switch turns
         except Exception as e:
@@ -126,8 +142,12 @@ def receive_moves():
             break
 
 
-# Function to draw the chessboard (flipped for client)
+# Function to draw the chessboard with labels placed as requested
 def draw_board():
+    # Adjust font size for labels
+    label_font = pygame.font.Font(None, 24)  # Reduced font size
+
+    # Draw the squares on the chessboard
     for row in range(board_size):
         for col in range(board_size):
             if is_server:
@@ -135,6 +155,21 @@ def draw_board():
             else:
                 color = light_square_color if (7 - row + col) % 2 == 0 else dark_square_color  # Flip for client
             pygame.draw.rect(screen, color, pygame.Rect(col * square_size, row * square_size, square_size, square_size))
+    
+    # Draw the column labels (a-h) at the bottom-right corner
+    offset = 5  # Move the letters a little to the right
+    for col in range(board_size):
+        label = chr(ord('a') + col)  # Convert column number to letter (a-h)
+        text = label_font.render(label, True, black)
+        # Position the column labels at the extreme bottom-right corner with an offset
+        screen.blit(text, ((col + 1) * square_size - text.get_width() - 10 + offset, HEIGHT - text.get_height() - 10))  # Adjusted position
+
+    # Draw the row labels (1-8) at the extreme top-left corner
+    for row in range(board_size):
+        label = str(8 - row)  # Convert row number to label (8-1)
+        text = label_font.render(label, True, black)
+        # Position the row labels at the extreme top-left corner
+        screen.blit(text, (10, row * square_size + square_size // 2 - text.get_height() // 2))  # Adjusted position
 
 # Function to draw the pieces
 def draw_pieces():
@@ -151,8 +186,11 @@ def draw_pieces():
         'b': pygame.image.load('images/black_bishop.png'),
         'q': pygame.image.load('images/black_king.png'),
         'k': pygame.image.load('images/black_queen.png'),
+       
     }
-    
+
+    # Scale down the piece images to be smaller
+    piece_size = square_size * 0.75  # Adjust size to 75% of the square size
     for square in chess.SQUARES:
         piece = board.piece_at(square)
         if piece:
@@ -161,8 +199,12 @@ def draw_pieces():
                 row, col = 7 - row, 7 - col  # Flip for client
             piece_image = piece_images.get(piece.symbol())
             if piece_image:
-                piece_image = pygame.transform.scale(piece_image, (square_size, square_size))
-                screen.blit(piece_image, (col * square_size, (7 - row) * square_size))
+                piece_image = pygame.transform.scale(piece_image, (piece_size, piece_size))
+                # Calculate position to center the piece within the square
+                piece_x = col * square_size + (square_size - piece_size) // 2
+                piece_y = (7 - row) * square_size + (square_size - piece_size) // 2
+                screen.blit(piece_image, (piece_x, piece_y))
+
 
 # Function to highlight the legal moves
 def highlight_legal_moves():
@@ -179,21 +221,45 @@ def highlight_legal_moves():
 def handle_move(start_square, end_square):
     global turn
     try:
-        move = chess.Move.from_uci(f"{start_square}{end_square}")
+        # Convert square names to integers if needed
+        if isinstance(start_square, str):
+            start_square = chess.parse_square(start_square)
+        if isinstance(end_square, str):
+            end_square = chess.parse_square(end_square)
+
+        move = chess.Move(start_square, end_square)
         if move in board.legal_moves:
             board.push(move)  # Apply the move locally
 
             # Save the move in the database
             db_manager.save_move(move.uci(), player_names[turn])
 
-            move_list.append({"player": player_names[turn], "move": move.uci()})  # Save move in move_list
+            # Get piece type
+            piece = board.piece_at(end_square)
+            piece_type = piece.piece_type  # Integer value representing the piece type
+            piece_name = {
+                chess.PAWN: "Pawn",
+                chess.KNIGHT: "Knight",
+                chess.BISHOP: "Bishop",
+                chess.ROOK: "Rook",
+                chess.QUEEN: "Queen",
+                chess.KING: "King"
+            }.get(piece_type, "Unknown")
+
+            # Add move to the move_list with piece type
+            move_list.append({
+                "player": player_names[turn],
+                "piece": piece_name,
+                "move": f"{chess.square_name(start_square)} to {chess.square_name(end_square)}"
+            })
+
             send_move(move.uci())  # Send the move to the opponent
-           
             turn = not turn       # Switch turns
         else:
             print("Illegal move!")
-    except ValueError:
-        print("Invalid move format!")
+    except ValueError as e:
+        print(f"Invalid move format: {e}")
+
 
 # Function to draw the sidebar with player info and turn display
 def draw_sidebar():
@@ -227,7 +293,7 @@ def draw_sidebar():
     # Display move tracker
     move_text_y = 200  # Initial Y position for displaying moves
     for move_entry in move_list:
-        move_text = f"{move_entry['player']}: {move_entry['move']}"
+        move_text = f"{move_entry['player']} ({move_entry['piece']}): {move_entry['move']}"
         move_display = font.render(move_text, True, white)
         screen.blit(move_display, (board_size * square_size + 20, move_text_y))
         move_text_y += 20  # Increment Y position for the next move
